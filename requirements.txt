@@ -4,6 +4,7 @@ Pillow==10.4.0
 
 # Для локальной бесплатной транскрипции (TRANSCRIBE_MODE=local, по умолчанию)
 faster-whisper==1.0.3
+requests==2.32.3
 
 # Для транскрипции через OpenAI Whisper API (TRANSCRIBE_MODE=openai) —
 # можно закомментировать, если используешь только local
