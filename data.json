@@ -1,0 +1,27 @@
+{
+  "chats": {
+    "-5205918631": {
+      "members": {
+        "1762280778": {
+          "username": "Windigo_505",
+          "first_name": "Windigo_505"
+        }
+      },
+      "call_deny": [
+        1762280778
+      ],
+      "hb_notified": {}
+    }
+  },
+  "users": {
+    "1762280778": {
+      "date": "17.03",
+      "name": "Windigo_505"
+    }
+  },
+  "map_file_ids": {
+    "floor_3": "AgACAgIAAxkDAAM8apklIl-fEz5fRtxlZNMhZ3zfz8UAApwiaxup3tBIEAWR8pi9_-gBAAMCAAN3AAM9BA",
+    "floor_2": "AgACAgIAAxkDAANCapkll9lHnHnH6clCTP8a9XL6TzkAAqAiaxup3tBI83FZmFQEn0sBAAMCAAN3AAM9BA",
+    "floor_1": "AgACAgIAAxkDAANEapkm0QrqnfiarRKLmwoftAvQl1IAArgiaxup3tBI-56tqUAuV5EBAAMCAAN3AAM9BA"
+  }
+}
