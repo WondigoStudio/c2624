@@ -17,7 +17,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from datetime import datetime, time as dtime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from dotenv import load_dotenv
 from telegram import InputMediaPhoto, Update
@@ -628,6 +630,29 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.warning("Ошибка при обработке апдейта: %s", context.error)
 
 
+class _HealthCheckHandler(BaseHTTPRequestHandler):
+    """Пустой HTTP-обработчик — нужен только чтобы Render (Web Service)
+    считал сервис 'живым' по открытому порту. Реальный трафик бот не получает —
+    вся работа идёт через Telegram long polling."""
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass  # не засоряем логи бота HTTP-пингами
+
+
+def start_health_server() -> None:
+    port = int(os.getenv("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), _HealthCheckHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Health-check сервер запущен на порту %s (для Render Web Service).", port)
+
+
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN в переменных окружения / .env")
@@ -667,6 +692,11 @@ def main() -> None:
     )
 
     application.add_error_handler(error_handler)
+
+    # Render Web Service требует открытый порт — запускаем фиктивный HTTP-сервер
+    # в фоновом потоке. Сам бот при этом продолжает работать через long polling.
+    if os.getenv("PORT"):
+        start_health_server()
 
     if application.job_queue is not None:
         application.job_queue.run_daily(
