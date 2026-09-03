@@ -17,5 +17,5 @@ services:
         value: map
       - key: MAP_FLOOR_COUNT
         value: "3"
-      - key: DATA_DIR
-        value: /app/data
+      - key: DATABASE_URL
+        sync: false
