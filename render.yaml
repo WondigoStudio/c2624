@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: campus-bot
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TIMEZONE
+        value: Asia/Almaty
+      - key: TRANSCRIBE_MODE
+        value: local
+      - key: LOCAL_WHISPER_MODEL
+        value: small
+      - key: MAP_DIR
+        value: map
+      - key: MAP_FLOOR_COUNT
+        value: "3"
+      - key: DATA_DIR
+        value: /app/data
