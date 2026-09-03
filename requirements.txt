@@ -2,10 +2,13 @@ python-telegram-bot[job-queue]==21.6
 python-dotenv==1.0.1
 Pillow==10.4.0
 
-# Для локальной бесплатной транскрипции (TRANSCRIBE_MODE=local, по умолчанию)
+# Для локальной бесплатной транскрипции через Vosk (TRANSCRIBE_MODE=vosk) — лёгкая по памяти
+vosk==0.3.45
+
+# Для локальной бесплатной транскрипции через faster-whisper (TRANSCRIBE_MODE=local, тяжелее)
 faster-whisper==1.0.3
 requests==2.32.3
 
-# Для транскрипции через OpenAI Whisper API (TRANSCRIBE_MODE=openai) —
-# можно закомментировать, если используешь только local
+# Для транскрипции через OpenAI/Groq (TRANSCRIBE_MODE=openai или groq) —
+# можно закомментировать, если используешь только local/vosk
 openai==1.51.0
