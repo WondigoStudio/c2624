@@ -41,9 +41,12 @@ CABINET_RE = re.compile(r"^\s*([A-Za-zА-Яа-яЁё]+\d+)\.(\d+)\.(\d)(\d+)\s*$
 DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
 
 
+def escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def mention_html(user_id: int, name: str) -> str:
-    safe_name = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+    return f'<a href="tg://user?id={user_id}">{escape_html(name)}</a>'
 
 
 def find_map_file(stem: str) -> str | None:
@@ -118,9 +121,31 @@ async def track_member(update: Update, data: dict) -> None:
     storage.register_member(data, update.effective_chat.id, user.id, user.username, user.first_name)
 
 
+async def require_group(update: Update) -> bool:
+    if update.effective_chat.type in ("group", "supergroup"):
+        return True
+    await update.message.reply_text("Эта команда работает только в группах.")
+    return False
+
+
+START_TEXT = (
+    "Привет! Вот что я умею:\n\n"
+    "/call — позвать всех в чате\n"
+    "/call_deny — выйти из созыва или вернуться обратно\n"
+    "/cab C1.1.323 — узнать павильон, блок, этаж и кабинет по коду\n"
+    "/map — карты всех этажей, /map 3 — карта конкретного этажа\n"
+    "/hb 17.03 — сохранить день рождения, /hb off — удалить\n"
+    "/hb_info — список дней рождения в чате\n\n"
+    "Голосовые, кружки и видео я расшифровываю автоматически."
+)
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(START_TEXT)
+
+
 async def cmd_call(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Эта команда работает только в группах.")
+    if not await require_group(update):
         return
 
     data = storage.load()
@@ -147,8 +172,7 @@ async def cmd_call(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_call_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Эта команда работает только в группах.")
+    if not await require_group(update):
         return
 
     data = storage.load()
@@ -344,7 +368,13 @@ async def transcribe_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     tg_file = await context.bot.get_file(media.file_id)
     local_dir = "/tmp/tgbot_media"
     os.makedirs(local_dir, exist_ok=True)
-    ext = "ogg" if message.voice else "mp4" if (message.video_note or message.video) else "mp3"
+
+    if message.voice:
+        ext = "ogg"
+    elif message.video_note or message.video:
+        ext = "mp4"
+    else:
+        ext = "mp3"
     local_path = os.path.join(local_dir, f"{media.file_unique_id}.{ext}")
 
     await tg_file.download_to_drive(local_path)
@@ -356,7 +386,7 @@ async def transcribe_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not text:
         return
 
-    safe_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    safe_text = escape_html(text)
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=f"📝 <b>Транскрипция:</b>\n<blockquote>{safe_text}</blockquote>",
@@ -395,6 +425,7 @@ def main() -> None:
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("call", cmd_call))
     application.add_handler(CommandHandler("call_deny", cmd_call_deny))
     application.add_handler(CommandHandler("cab", cmd_cab))
