@@ -50,7 +50,10 @@ TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Moscow")
 # или "openai" (Whisper API, платно, нужен OPENAI_API_KEY)
 TRANSCRIBE_MODE = os.getenv("TRANSCRIBE_MODE", "local").lower()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "whisper-large-v3-turbo")
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "small")  # tiny/base/small/medium/large-v3
+VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "/app/vosk-model")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -60,14 +63,27 @@ logger = logging.getLogger(__name__)
 
 openai_client = None
 local_whisper_model = None
+vosk_model = None
+transcribe_model_name = None  # используется только для openai/groq режимов
 
 if TRANSCRIBE_MODE == "openai":
     if OPENAI_API_KEY:
         from openai import OpenAI
 
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        transcribe_model_name = "whisper-1"
     else:
         logger.warning("TRANSCRIBE_MODE=openai, но OPENAI_API_KEY не задан — транскрипция отключена.")
+elif TRANSCRIBE_MODE == "groq":
+    if GROQ_API_KEY:
+        from openai import OpenAI
+
+        # У Groq API, совместимый с OpenAI — просто другой base_url и ключ
+        openai_client = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
+        transcribe_model_name = GROQ_MODEL
+        logger.info("Транскрипция через Groq (%s).", GROQ_MODEL)
+    else:
+        logger.warning("TRANSCRIBE_MODE=groq, но GROQ_API_KEY не задан — транскрипция отключена.")
 elif TRANSCRIBE_MODE == "local":
     try:
         from faster_whisper import WhisperModel
@@ -77,6 +93,22 @@ elif TRANSCRIBE_MODE == "local":
         logger.info("Локальная модель Whisper (%s) загружена.", LOCAL_WHISPER_MODEL)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Не удалось загрузить локальную модель Whisper: %s", exc)
+elif TRANSCRIBE_MODE == "vosk":
+    try:
+        import vosk
+
+        vosk.SetLogLevel(-1)  # выключаем шумные логи vosk в консоль
+        if os.path.isdir(VOSK_MODEL_PATH):
+            vosk_model = vosk.Model(VOSK_MODEL_PATH)
+            logger.info("Локальная модель Vosk загружена из %s.", VOSK_MODEL_PATH)
+        else:
+            logger.warning(
+                "TRANSCRIBE_MODE=vosk, но папка модели не найдена: %s. "
+                "Транскрипция отключена.",
+                VOSK_MODEL_PATH,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Не удалось загрузить модель Vosk: %s", exc)
 else:
     logger.warning("Неизвестный TRANSCRIBE_MODE=%s — транскрипция отключена.", TRANSCRIBE_MODE)
 
@@ -552,8 +584,46 @@ async def check_birthdays_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 
+def transcribe_with_vosk(media_path: str) -> str:
+    """Конвертирует аудио/видео в 16кГц моно WAV через ffmpeg и распознаёт через Vosk."""
+    import json
+    import subprocess
+    import wave
+
+    wav_path = media_path + ".16k.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", media_path,
+            "-ar", "16000", "-ac", "1", "-f", "wav", wav_path,
+            "-loglevel", "error",
+        ],
+        check=True,
+    )
+
+    try:
+        with wave.open(wav_path, "rb") as wf:
+            rec = vosk.KaldiRecognizer(vosk_model, wf.getframerate())
+            rec.SetWords(False)
+            parts = []
+            while True:
+                data = wf.readframes(4000)
+                if not data:
+                    break
+                if rec.AcceptWaveform(data):
+                    result = json.loads(rec.Result())
+                    if result.get("text"):
+                        parts.append(result["text"])
+            final = json.loads(rec.FinalResult())
+            if final.get("text"):
+                parts.append(final["text"])
+            return " ".join(parts).strip()
+    finally:
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+
+
 async def transcribe_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not openai_client and not local_whisper_model:
+    if not openai_client and not local_whisper_model and not vosk_model:
         return  # транскрипция не настроена — тихо пропускаем
 
     message = update.message
@@ -581,10 +651,12 @@ async def transcribe_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if openai_client:
             with open(local_path, "rb") as audio_file:
                 transcript = openai_client.audio.transcriptions.create(
-                    model="whisper-1",
+                    model=transcribe_model_name,
                     file=audio_file,
                 )
             text = transcript.text.strip()
+        elif vosk_model:
+            text = transcribe_with_vosk(local_path)
         else:
             segments, _info = local_whisper_model.transcribe(local_path)
             text = " ".join(seg.text.strip() for seg in segments).strip()
@@ -656,9 +728,9 @@ def start_health_server() -> None:
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN в переменных окружения / .env")
-    if not openai_client and not local_whisper_model:
+    if not openai_client and not local_whisper_model and not vosk_model:
         logger.warning(
-            "Транскрипция не настроена (ни OpenAI, ни локальная модель) — "
+            "Транскрипция не настроена (ни OpenAI/Groq, ни локальная модель) — "
             "голосовые сообщения расшифровываться не будут."
         )
 
