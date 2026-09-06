@@ -17,6 +17,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    ConversationHandler,
     MessageHandler,
     filters,
 )
@@ -31,6 +32,7 @@ TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Moscow")
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "/app/vosk-model")
 MAP_DIR = os.path.join(os.path.dirname(__file__), os.getenv("MAP_DIR", "map"))
 MAP_FLOOR_COUNT = int(os.getenv("MAP_FLOOR_COUNT", "3"))
+STAROSTA_CHAT_ID = os.getenv("STAROSTA_CHAT_ID")
 
 TZ = ZoneInfo(TIMEZONE_NAME)
 
@@ -135,7 +137,8 @@ START_TEXT = (
     "/cab C1.1.323 — узнать павильон, блок, этаж и кабинет по коду\n"
     "/map — карты всех этажей, /map 3 — карта конкретного этажа\n"
     "/hb 17.03 — сохранить день рождения, /hb off — удалить\n"
-    "/hb_info — список дней рождения в чате\n\n"
+    "/hb_info — список дней рождения в чате\n"
+    "/support — отправить заявку о проблеме старосте\n\n"
     "Голосовые, кружки и видео я расшифровываю автоматически."
 )
 
@@ -395,6 +398,77 @@ async def transcribe_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+SUPPORT_NAME, SUPPORT_EMAIL, SUPPORT_GROUP, SUPPORT_PROBLEM, SUPPORT_PHOTO = range(5)
+
+
+async def support_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["support"] = {}
+    await update.message.reply_text("Напишите Имя")
+    return SUPPORT_NAME
+
+
+async def support_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["support"]["name"] = update.message.text
+    await update.message.reply_text("Напишите Почту")
+    return SUPPORT_EMAIL
+
+
+async def support_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["support"]["email"] = update.message.text
+    await update.message.reply_text("Напишите группу")
+    return SUPPORT_GROUP
+
+
+async def support_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["support"]["group"] = update.message.text
+    await update.message.reply_text("Напишите проблему")
+    return SUPPORT_PROBLEM
+
+
+async def support_problem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["support"]["problem"] = update.message.text
+    await update.message.reply_text("Пришлите фото")
+    return SUPPORT_PHOTO
+
+
+async def support_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    info = context.user_data["support"]
+    text = (
+        "Новая заявка о проблеме\n\n"
+        f"Имя: {info['name']}\n"
+        f"Почта: {info['email']}\n"
+        f"Группа: {info['group']}\n"
+        f"Проблема: {info['problem']}"
+    )
+
+    if STAROSTA_CHAT_ID:
+        await context.bot.send_photo(
+            chat_id=STAROSTA_CHAT_ID,
+            photo=update.message.photo[-1].file_id,
+            caption=text,
+        )
+    await update.message.reply_text("Спасибо, заявка отправлена старосте.")
+    return ConversationHandler.END
+
+
+async def support_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Заявка отменена.")
+    return ConversationHandler.END
+
+
+support_conversation = ConversationHandler(
+    entry_points=[CommandHandler("support", support_start)],
+    states={
+        SUPPORT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_name)],
+        SUPPORT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_email)],
+        SUPPORT_GROUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_group)],
+        SUPPORT_PROBLEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_problem)],
+        SUPPORT_PHOTO: [MessageHandler(filters.PHOTO, support_photo)],
+    },
+    fallbacks=[CommandHandler("cancel", support_cancel)],
+)
+
+
 async def track_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or update.effective_user.is_bot:
         return
@@ -435,6 +509,7 @@ def main() -> None:
     application.add_handler(
         MessageHandler(filters.VOICE | filters.VIDEO_NOTE | filters.AUDIO | filters.VIDEO, transcribe_voice)
     )
+    application.add_handler(support_conversation)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, track_any_message))
 
     if os.getenv("PORT"):
