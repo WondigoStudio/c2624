@@ -9,13 +9,11 @@ services:
         sync: false
       - key: TIMEZONE
         value: Asia/Almaty
-      - key: TRANSCRIBE_MODE
-        value: local
-      - key: LOCAL_WHISPER_MODEL
-        value: small
       - key: MAP_DIR
         value: map
       - key: MAP_FLOOR_COUNT
         value: "3"
+      - key: STAROSTA_CHAT_ID
+        sync: false
       - key: DATABASE_URL
         sync: false
