@@ -11,7 +11,7 @@ _DEFAULT_ROOT = {"chats": {}, "users": {}, "map_file_ids": {}}
 
 
 def _default_chat():
-    return {"members": {}, "call_deny": [], "hb_notified": {}}
+    return {"members": {}, "call_deny": [], "hb_notified": {}, "events": []}
 
 
 def _with_defaults(data):
@@ -120,3 +120,18 @@ def get_map_file_id(data, stem):
 
 def set_map_file_id(data, stem, file_id):
     data.setdefault("map_file_ids", {})[stem] = file_id
+
+
+def add_event(data, chat_id, date_str, text):
+    chat = get_chat(data, chat_id)
+    chat["events"].append({"date": date_str, "text": text, "notified": False})
+
+
+def get_events(data, chat_id):
+    return get_chat(data, chat_id)["events"]
+
+
+def remove_event(data, chat_id, index):
+    chat = get_chat(data, chat_id)
+    if 0 <= index < len(chat["events"]):
+        chat["events"].pop(index)
