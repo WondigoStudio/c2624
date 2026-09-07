@@ -11,10 +11,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from telegram import InputMediaPhoto, Update
+import calendar as cal_module
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -138,6 +140,10 @@ START_TEXT = (
     "/map — карты всех этажей, /map 3 — карта конкретного этажа\n"
     "/hb 17.03 — сохранить день рождения, /hb off — удалить\n"
     "/hb_info — список дней рождения в чате\n"
+    "/event 17.03 Текст — добавить событие на дату\n"
+    "/events — список событий\n"
+    "/event_del номер — удалить событие\n"
+    "/calendar — календарь с кнопками\n"
     "/support — отправить заявку о проблеме старосте\n\n"
     "Голосовые, кружки и видео я расшифровываю автоматически."
 )
@@ -305,6 +311,181 @@ async def cmd_hb_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         lines.append(f"• {info['name']} — {info['date']}")
 
     await update.message.reply_text("\n".join(lines))
+
+
+MONTHS_RU = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+]
+
+
+def build_month_keyboard(year, month, event_days):
+    weeks = cal_module.monthcalendar(year, month)
+    keyboard = [[InlineKeyboardButton(f"{MONTHS_RU[month - 1]} {year}", callback_data="cal|ignore")]]
+    keyboard.append([InlineKeyboardButton(d, callback_data="cal|ignore") for d in ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]])
+
+    for week in weeks:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="cal|ignore"))
+            else:
+                label = f"•{day}" if day in event_days else str(day)
+                row.append(InlineKeyboardButton(label, callback_data=f"cal|day|{year}-{month:02d}-{day:02d}"))
+        keyboard.append(row)
+
+    prev_month, prev_year = (12, year - 1) if month == 1 else (month - 1, year)
+    next_month, next_year = (1, year + 1) if month == 12 else (month + 1, year)
+    keyboard.append([
+        InlineKeyboardButton("◀️", callback_data=f"cal|nav|{prev_year}-{prev_month:02d}"),
+        InlineKeyboardButton("▶️", callback_data=f"cal|nav|{next_year}-{next_month:02d}"),
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def event_days_for_month(data, chat_id, year, month):
+    events = storage.get_events(data, chat_id)
+    days = set()
+    for event in events:
+        d, m, y = event["date"].split(".")
+        if int(m) == month and int(y) == year:
+            days.add(int(d))
+    return days
+
+
+async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group(update):
+        return
+    now = datetime.now(TZ)
+    data = storage.load()
+    event_days = event_days_for_month(data, update.effective_chat.id, now.year, now.month)
+    await update.message.reply_text(
+        "📅 Календарь событий",
+        reply_markup=build_month_keyboard(now.year, now.month, event_days),
+    )
+
+
+async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    parts = query.data.split("|")
+    action = parts[1]
+
+    if action == "ignore":
+        await query.answer()
+        return
+
+    chat_id = update.effective_chat.id
+    data = storage.load()
+
+    if action in ("nav", "back"):
+        year, month = map(int, parts[2].split("-"))
+        event_days = event_days_for_month(data, chat_id, year, month)
+        await query.edit_message_text(
+            "📅 Календарь событий",
+            reply_markup=build_month_keyboard(year, month, event_days),
+        )
+        await query.answer()
+        return
+
+    if action == "day":
+        year, month, day = map(int, parts[2].split("-"))
+        date_str = f"{day:02d}.{month:02d}.{year}"
+        events = [e for e in storage.get_events(data, chat_id) if e["date"] == date_str]
+
+        if events:
+            lines = [f"📅 {date_str}:"] + [f"• {e['text']}" for e in events]
+        else:
+            lines = [f"📅 {date_str}: событий нет"]
+        lines.append(f"\nДобавить: /event {day:02d}.{month:02d}.{year} Текст")
+
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data=f"cal|back|{year}-{month:02d}")]])
+        await query.edit_message_text("\n".join(lines), reply_markup=keyboard)
+        await query.answer()
+        return
+
+
+EVENT_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s+(.+)$", re.DOTALL)
+
+
+async def cmd_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group(update):
+        return
+
+    raw = update.message.text.partition(" ")[2]
+    match = EVENT_RE.match(raw)
+    if not match:
+        await update.message.reply_text("Использование: /event 17.03 Текст события")
+        return
+
+    day, month, year_str, text = match.groups()
+    year = int(year_str) if year_str else datetime.now(TZ).year
+
+    try:
+        event_date = datetime(year, int(month), int(day)).date()
+    except ValueError:
+        await update.message.reply_text("Такой даты не существует.")
+        return
+
+    if not year_str and event_date < datetime.now(TZ).date():
+        event_date = event_date.replace(year=event_date.year + 1)
+
+    date_str = event_date.strftime("%d.%m.%Y")
+
+    data = storage.load()
+    storage.add_event(data, update.effective_chat.id, date_str, text.strip())
+    storage.save(data)
+
+    await update.message.reply_text(f"Записал событие на {date_str}: {text.strip()}")
+
+
+async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group(update):
+        return
+
+    data = storage.load()
+    events = storage.get_events(data, update.effective_chat.id)
+    if not events:
+        await update.message.reply_text("Событий пока нет. Добавь через /event 17.03 Текст")
+        return
+
+    def sort_key(item):
+        return datetime.strptime(item[1]["date"], "%d.%m.%Y")
+
+    lines = ["📅 События:"]
+    for i, event in sorted(enumerate(events), key=sort_key):
+        lines.append(f"{i + 1}. {event['date']} — {event['text']}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_event_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group(update):
+        return
+
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Использование: /event_del номер (см. /events)")
+        return
+
+    data = storage.load()
+    storage.remove_event(data, update.effective_chat.id, int(context.args[0]) - 1)
+    storage.save(data)
+    await update.message.reply_text("Удалено.")
+
+
+async def check_events_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    data = storage.load()
+    today_str = datetime.now(TZ).strftime("%d.%m.%Y")
+
+    for chat_id_str, chat in data["chats"].items():
+        for event in chat["events"]:
+            if event["date"] == today_str and not event["notified"]:
+                await context.bot.send_message(
+                    chat_id=int(chat_id_str),
+                    text=f"📅 Сегодня: {event['text']}",
+                )
+                event["notified"] = True
+
+    storage.save(data)
 
 
 async def check_birthdays_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -506,6 +687,11 @@ def main() -> None:
     application.add_handler(CommandHandler("map", cmd_map))
     application.add_handler(CommandHandler("hb", cmd_hb))
     application.add_handler(CommandHandler("hb_info", cmd_hb_info))
+    application.add_handler(CommandHandler("event", cmd_event))
+    application.add_handler(CommandHandler("events", cmd_events))
+    application.add_handler(CommandHandler("event_del", cmd_event_del))
+    application.add_handler(CommandHandler("calendar", cmd_calendar))
+    application.add_handler(CallbackQueryHandler(calendar_callback, pattern=r"^cal\|"))
     application.add_handler(
         MessageHandler(filters.VOICE | filters.VIDEO_NOTE | filters.AUDIO | filters.VIDEO, transcribe_voice)
     )
@@ -517,6 +703,7 @@ def main() -> None:
 
     if application.job_queue is not None:
         application.job_queue.run_daily(check_birthdays_job, time=dtime(hour=9, minute=0, tzinfo=TZ))
+        application.job_queue.run_daily(check_events_job, time=dtime(hour=9, minute=0, tzinfo=TZ))
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
