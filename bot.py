@@ -343,13 +343,26 @@ def build_month_keyboard(year, month, event_days):
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_chat_birthdays(data, chat_id):
+    chat = storage.get_chat(data, chat_id)
+    member_ids = set(chat["members"].keys())
+    result = []
+    for uid, info in data["users"].items():
+        if uid in member_ids:
+            d, m = info["date"].split(".")
+            result.append((int(d), int(m), info["name"]))
+    return result
+
+
 def event_days_for_month(data, chat_id, year, month):
-    events = storage.get_events(data, chat_id)
     days = set()
-    for event in events:
+    for event in storage.get_events(data, chat_id):
         d, m, y = event["date"].split(".")
         if int(m) == month and int(y) == year:
             days.add(int(d))
+    for d, m, _name in get_chat_birthdays(data, chat_id):
+        if m == month:
+            days.add(d)
     return days
 
 
@@ -391,12 +404,16 @@ async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         year, month, day = map(int, parts[2].split("-"))
         date_str = f"{day:02d}.{month:02d}.{year}"
         events = [e for e in storage.get_events(data, chat_id) if e["date"] == date_str]
+        birthdays = [name for d, m, name in get_chat_birthdays(data, chat_id) if d == day and m == month]
 
-        if events:
-            lines = [f"📅 {date_str}:"] + [f"• {e['text']}" for e in events]
-        else:
-            lines = [f"📅 {date_str}: событий нет"]
-        lines.append(f"\nДобавить: /event {day:02d}.{month:02d}.{year} Текст")
+        lines = [f"📅 {date_str}:"]
+        for e in events:
+            lines.append(f"• {e['text']}")
+        for name in birthdays:
+            lines.append(f"🎂 {name}")
+        if not events and not birthdays:
+            lines.append("Ничего нет")
+        lines.append(f"\nДобавить событие: /event {day:02d}.{month:02d}.{year} Текст")
 
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data=f"cal|back|{year}-{month:02d}")]])
         await query.edit_message_text("\n".join(lines), reply_markup=keyboard)
