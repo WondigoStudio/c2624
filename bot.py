@@ -75,7 +75,10 @@ async def send_map_photo(update: Update, stem: str, caption: str, not_found_text
     data = storage.load()
     cached = storage.get_map_file_id(data, stem)
     if cached:
-        kind, file_id = cached.split(":", 1)
+        if ":" in cached:
+            kind, file_id = cached.split(":", 1)
+        else:
+            kind, file_id = "photo", cached
         if kind == "doc":
             await update.message.reply_document(document=file_id, caption=caption)
         else:
@@ -506,7 +509,7 @@ async def check_events_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     today_str = datetime.now(TZ).strftime("%d.%m.%Y")
 
     for chat_id_str, chat in data["chats"].items():
-        for event in chat["events"]:
+        for event in chat.get("events", []):
             if event["date"] == today_str and not event["notified"]:
                 await context.bot.send_message(
                     chat_id=int(chat_id_str),
